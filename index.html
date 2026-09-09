@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Interactive Birthday Card for Dad</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #030206;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            color: #fff;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #webcam {
+            display: none;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 24px;
+            left: 24px;
+            z-index: 10;
+            background: rgba(18, 12, 28, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 215, 0, 0.2);
+            padding: 18px 24px;
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            max-width: 320px;
+        }
+        #ui-overlay h1 {
+            font-size: 1.15rem;
+            margin-bottom: 8px;
+            color: #ffeaa7;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        #ui-overlay p {
+            font-size: 0.85rem;
+            color: #d1ccc0;
+            line-height: 1.5;
+        }
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 10px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #ffb142;
+            transition: all 0.3s ease;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+            color: #ffeaa7;
+            font-size: 1.1rem;
+            letter-spacing: 1.5px;
+            text-shadow: 0 0 15px rgba(255, 234, 167, 0.4);
+            pointer-events: none;
+            transition: opacity 0.6s ease;
+            background: rgba(10, 5, 20, 0.8);
+            padding: 16px 28px;
+            border-radius: 30px;
+            border: 1px solid rgba(255, 215, 0, 0.3);
+        }
+    </style>
+
+    <!-- Three.js & OrbitControls & Postprocessing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading">✨ Initializing 3D Birthday Scene...</div>
+    <div id="ui-overlay">
+        <h1>Interactive 3D Card</h1>
+        <p>• <b>Open Hand:</b> Unfold Card<br>• <b>Fist:</b> Close Card<br>• <b>Drag Mouse:</b> Rotate View</p>
+        <div id="status" class="status-badge">Hand Status: Waiting...</div>
+    </div>
+
+    <div id="canvas-container"></div>
+    <video id="webcam" playsinline></video>
+
+    <script>
+        // --- 1. Audio Engine ---
+        class BGMPlayer {
+            constructor() {
+                this.ctx = null;
+                this.isPlaying = false;
+                this.timer = null;
+                this.notes = [
+                    {f: 264, d: 0.4}, {f: 264, d: 0.4}, {f: 297, d: 0.8}, {f: 264, d: 0.8}, {f: 352, d: 0.8}, {f: 330, d: 1.6},
+                    {f: 264, d: 0.4}, {f: 264, d: 0.4}, {f: 297, d: 0.8}, {f: 264, d: 0.8}, {f: 396, d: 0.8}, {f: 352, d: 1.6},
+                    {f: 264, d: 0.4}, {f: 264, d: 0.4}, {f: 528, d: 0.8}, {f: 440, d: 0.8}, {f: 352, d: 0.8}, {f: 330, d: 0.8}, {f: 297, d: 0.8},
+                    {f: 466, d: 0.4}, {f: 466, d: 0.4}, {f: 440, d: 0.8}, {f: 352, d: 0.8}, {f: 396, d: 0.8}, {f: 352, d: 1.6}
+                ];
+                this.currentIndex = 0;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            }
+
+            playNote(freq, duration) {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+
+                gain.gain.setValueAtTime(0.25, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration * 0.95);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            }
+
+            start() {
+                this.init();
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+                if (this.isPlaying) return;
+                this.isPlaying = true;
+                this.currentIndex = 0;
+                this.next();
+            }
+
+            next() {
+                if (!this.isPlaying) return;
+                const note = this.notes[this.currentIndex];
+                this.playNote(note.f, note.d);
+                this.currentIndex = (this.currentIndex + 1) % this.notes.length;
+                this.timer = setTimeout(() => this.next(), note.d * 580);
+            }
+
+            stop() {
+                this.isPlaying = false;
+                if (this.timer) clearTimeout(this.timer);
+            }
+        }
+
+        const bgm = new BGMPlayer();
+
+        // --- 2. High Resolution Canvas Texture Generation ---
+        function createCoverTexture() {
+            const canvas = document.createElement('canvas');
+            // 将画布分辨率提升至 2048x2896，使 3D 渲染下的字体极其清晰
+            canvas.width = 2048;
+            canvas.height = 2896;
+            const ctx = canvas.getContext('2d');
+
+            // 渐变背景
+            const grad = ctx.createRadialGradient(1024, 1448, 100, 1024, 1448, 1600);
+            grad.addColorStop(0, '#2e183a');
+            grad.addColorStop(0.6, '#1a0d24');
+            grad.addColorStop(1, '#0c0512');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 金色双线边框
+            ctx.strokeStyle = '#eccc68';
+            ctx.lineWidth = 12;
+            ctx.strokeRect(100, 100, canvas.width - 200, canvas.height - 200);
+            ctx.lineWidth = 4;
+            ctx.strokeRect(124, 124, canvas.width - 248, canvas.height - 248);
+
+            // 四角花纹
+            const drawCorner = (x, y, r1, r2) => {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.strokeStyle = '#ffeaa7';
+                ctx.lineWidth = 6;
+                ctx.beginPath();
+                ctx.arc(0, 0, 60, r1, r2);
+                ctx.stroke();
+                ctx.restore();
+            };
+            drawCorner(124, 124, 0, Math.PI / 2);
+            drawCorner(canvas.width - 124, 124, Math.PI / 2, Math.PI);
+            drawCorner(canvas.width - 124, canvas.height - 124, Math.PI, Math.PI * 1.5);
+            drawCorner(124, canvas.height - 124, Math.PI * 1.5, Math.PI * 2);
+
+            // 背景星芒
+            ctx.fillStyle = 'rgba(255, 234, 167, 0.35)';
+            for (let i = 0; i < 80; i++) {
+                const rx = Math.random() * (canvas.width - 320) + 160;
+                const ry = Math.random() * (canvas.height - 320) + 160;
+                const size = Math.random() * 6 + 2;
+                ctx.beginPath();
+                ctx.arc(rx, ry, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // 封面高清标题文字
+            ctx.shadowColor = 'rgba(255, 215, 0, 0.6)';
+            ctx.shadowBlur = 30;
+            ctx.fillStyle = '#ffeaa7';
+            ctx.font = 'bold 80px "Georgia", serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('SPECIAL DAY', canvas.width / 2, 480);
+
+            ctx.font = 'bold 160px "Georgia", serif';
+            const textGrad = ctx.createLinearGradient(0, 600, 0, 840);
+            textGrad.addColorStop(0, '#ffffff');
+            textGrad.addColorStop(1, '#ffd700');
+            ctx.fillStyle = textGrad;
+            ctx.fillText('Happy Birthday', canvas.width / 2, 720);
+
+            ctx.font = 'bold 96px "Georgia", serif';
+            ctx.fillStyle = '#f8c291';
+            ctx.fillText('— To My Wonderful Dad —', canvas.width / 2, 880);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            return texture;
+        }
+
+        function createInsideTexture() {
+            const canvas = document.createElement('canvas');
+            // 将画布分辨率提升至 2048x2896
+            canvas.width = 2048;
+            canvas.height = 2896;
+            const ctx = canvas.getContext('2d');
+
+            // 浅色暖纸高对比度背景
+            const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            grad.addColorStop(0, '#ffffff');
+            grad.addColorStop(1, '#f5efe6');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 金色外框
+            ctx.strokeStyle = '#d4af37';
+            ctx.lineWidth = 10;
+            ctx.strokeRect(90, 90, canvas.width - 180, canvas.height - 180);
+
+            ctx.strokeStyle = 'rgba(212, 175, 55, 0.4)';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(108, 108, canvas.width - 216, canvas.height - 216);
+
+            // 排版与文本（大幅增大字号、加粗、提高对比度）
+            ctx.textAlign = 'center';
+            
+            ctx.font = 'bold 150px "Georgia", serif';
+            ctx.fillStyle = '#a71d2a';
+            ctx.fillText('Dear Dad,', canvas.width / 2, 450);
+
+            ctx.font = 'bold 120px "Georgia", serif';
+            ctx.fillStyle = '#0f6b58';
+            ctx.fillText('Happy Birthday!', canvas.width / 2, 660);
+
+            // 正文祝词
+            ctx.font = '600 72px "Segoe UI", system-ui, sans-serif';
+            ctx.fillStyle = '#111827'; // 使用深色加强文字清晰度与对比度
+            const lines = [
+                'Thank you for your unconditional love,',
+                'endless wisdom, and steady support.',
+                'You have always been my greatest inspiration.',
+                '',
+                'May your special day be filled with warmth,',
+                'laughter, and everything that brings you joy.',
+                'Wishing you great health and happiness always!'
+            ];
+            lines.forEach((line, idx) => {
+                ctx.fillText(line, canvas.width / 2, 960 + idx * 130);
+            });
+
+            // 落款与日期
+            ctx.font = 'bold 88px "Segoe UI", system-ui, sans-serif';
+            ctx.fillStyle = '#a71d2a';
+            ctx.textAlign = 'right';
+            ctx.fillText('With Love, 抱抱 ❤️', canvas.width - 200, 2300);
+
+            ctx.font = 'bold 64px "Georgia", serif';
+            ctx.fillStyle = '#555555';
+            ctx.fillText('2026.09.10', canvas.width - 200, 2440);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            return texture;
+        }
+
+        // --- 3. Enhanced Sparkle & Heart Particle System ---
+        class FestiveParticleSystem {
+            constructor(scene) {
+                this.scene = scene;
+                this.particles = [];
+                this.count = 90;
+
+                const heartShape = new THREE.Shape();
+                const x = 0, y = 0;
+                heartShape.moveTo(x + 0.25, y + 0.25);
+                heartShape.bezierCurveTo(x + 0.25, y + 0.25, x, y, x, y - 0.25);
+                heartShape.bezierCurveTo(x, y - 0.55, x - 0.35, y - 0.77, x - 0.7, y - 0.77);
+                heartShape.bezierCurveTo(x - 1.05, y - 0.77, x - 1.3, y - 0.45, x - 1.3, y - 0.1);
+                heartShape.bezierCurveTo(x - 1.3, y + 0.35, x - 0.8, y + 0.75, x, y + 1.2);
+                heartShape.bezierCurveTo(x + 0.8, y + 0.75, x + 1.3, y + 0.35, x + 1.3, y - 0.1);
+                heartShape.bezierCurveTo(x + 1.3, y - 0.45, x + 1.05, y - 0.77, x + 0.7, y - 0.77);
+                heartShape.bezierCurveTo(x + 0.4, y - 0.77, x + 0.25, y + 0.25, x + 0.25, y + 0.25);
+
+                const heartGeom = new THREE.ShapeGeometry(heartShape);
+                heartGeom.scale(0.1, 0.1, 0.1);
+
+                const starShape = new THREE.Shape();
+                for(let i = 0; i < 8; i++) {
+                    const r = (i % 2 === 0) ? 0.15 : 0.05;
+                    const a = (i / 8) * Math.PI * 2;
+                    if(i === 0) starShape.moveTo(Math.cos(a)*r, Math.sin(a)*r);
+                    else starShape.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+                }
+                const starGeom = new THREE.ShapeGeometry(starShape);
+
+                const palette = [0xff4757, 0xffa502, 0x2ed573, 0x1e90ff, 0xeccc68, 0xff6b81];
+
+                this.group = new THREE.Group();
+                scene.add(this.group);
+
+                for (let i = 0; i < this.count; i++) {
+                    const isStar = Math.random() > 0.4;
+                    const geom = isStar ? starGeom : heartGeom;
+                    const mat = new THREE.MeshStandardMaterial({
+                        color: palette[Math.floor(Math.random() * palette.length)],
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 0,
+                        roughness: 0.2,
+                        metalness: 0.8,
+                        emissive: palette[Math.floor(Math.random() * palette.length)],
+                        emissiveIntensity: 0.3
+                    });
+                    const mesh = new THREE.Mesh(geom, mat);
+                    this.group.add(mesh);
+
+                    this.particles.push({
+                        mesh: mesh,
+                        vel: new THREE.Vector3(),
+                        rotVel: new THREE.Vector3(),
+                        active: false,
+                        scale: Math.random() * 0.8 + 0.6
+                    });
+                }
+            }
+
+            explode() {
+                this.particles.forEach(p => {
+                    p.mesh.position.set(0, 0.3, 0.2);
+                    p.mesh.scale.setScalar(p.scale);
+                    p.mesh.material.opacity = 1;
+                    
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.random() * Math.PI * 0.45;
+                    const speed = 0.06 + Math.random() * 0.1;
+
+                    p.vel.set(
+                        Math.sin(phi) * Math.cos(theta) * speed,
+                        Math.cos(phi) * speed + 0.04,
+                        Math.sin(phi) * Math.sin(theta) * speed
+                    );
+
+                    p.rotVel.set(
+                        (Math.random() - 0.5) * 0.15,
+                        (Math.random() - 0.5) * 0.15,
+                        (Math.random() - 0.5) * 0.15
+                    );
+                    p.active = true;
+                });
+            }
+
+            update() {
+                this.particles.forEach(p => {
+                    if (!p.active) return;
+                    p.mesh.position.add(p.vel);
+                    p.mesh.rotation.x += p.rotVel.x;
+                    p.mesh.rotation.y += p.rotVel.y;
+                    p.mesh.rotation.z += p.rotVel.z;
+
+                    p.vel.y -= 0.0012;
+                    p.mesh.material.opacity -= 0.006;
+
+                    if (p.mesh.material.opacity <= 0) {
+                        p.active = false;
+                    }
+                });
+            }
+        }
+
+        // --- 4. Main 3D Scene Setup ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x030206, 0.06);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 2.2, 7.2);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.1;
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxPolarAngle = Math.PI / 2 + 0.05;
+
+        // --- Lights Setup ---
+        const ambientLight = new THREE.AmbientLight(0x2a1b40, 1.5);
+        scene.add(ambientLight);
+
+        const candleLight = new THREE.PointLight(0xff9f43, 3.5, 10);
+        candleLight.position.set(0, 1.2, 1.8);
+        candleLight.castShadow = true;
+        candleLight.shadow.bias = -0.002;
+        scene.add(candleLight);
+
+        const keyLight = new THREE.DirectionalLight(0xffeedd, 1.2);
+        keyLight.position.set(5, 8, 5);
+        keyLight.castShadow = true;
+        scene.add(keyLight);
+
+        const rimLight = new THREE.DirectionalLight(0x8e44ad, 1.0);
+        rimLight.position.set(-5, 3, -5);
+        scene.add(rimLight);
+
+        // --- Post-processing: UnrealBloomPass ---
+        const composer = new THREE.EffectComposer(renderer);
+        const renderPass = new THREE.RenderPass(scene, camera);
+        composer.addPass(renderPass);
+
+        const bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            0.75,
+            0.5,
+            0.8
+        );
+        composer.addPass(bloomPass);
+
+        // --- 5. Create 3D Card & 3D Cake Model ---
+        const cardGroup = new THREE.Group();
+        scene.add(cardGroup);
+
+        const cardWidth = 2.4;
+        const cardHeight = 3.4;
+        const cardThickness = 0.02;
+
+        const coverTex = createCoverTexture();
+        const insideTex = createInsideTexture();
+
+        // 贺卡底页 (Inside Back)
+        const backGeo = new THREE.BoxGeometry(cardWidth, cardThickness, cardHeight);
+        const backMat = new THREE.MeshStandardMaterial({
+            map: insideTex,
+            roughness: 0.4,
+            metalness: 0.02
+        });
+        const backMesh = new THREE.Mesh(backGeo, backMat);
+        backMesh.position.set(0, 0, cardHeight / 2);
+        backMesh.receiveShadow = true;
+        cardGroup.add(backMesh);
+
+        // 贺卡封面页 (Top Cover)
+        const coverPivot = new THREE.Group();
+        coverPivot.position.set(0, 0, 0);
+        cardGroup.add(coverPivot);
+
+        const coverGeo = new THREE.BoxGeometry(cardWidth, cardThickness, cardHeight);
+        const blankMat = new THREE.MeshStandardMaterial({ color: 0x120a18, roughness: 0.6 });
+        const coverMaterials = [
+            blankMat, blankMat, blankMat, blankMat,
+            new THREE.MeshStandardMaterial({ map: coverTex, roughness: 0.3, metalness: 0.1 }),
+            blankMat
+        ];
+
+        const coverMesh = new THREE.Mesh(coverGeo, coverMaterials);
+        coverMesh.position.set(0, 0, cardHeight / 2);
+        coverMesh.castShadow = true;
+        coverPivot.add(coverMesh);
+
+        // --- 3D 蛋糕装饰 ---
+        const cakeGroup = new THREE.Group();
+        cakeGroup.position.set(0, cardThickness / 2 + 0.01, cardHeight / 2 + 0.3);
+        cakeGroup.rotation.x = Math.PI / 2;
+        coverPivot.add(cakeGroup);
+
+        const cakeBottomGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.25, 32);
+        const cakeMat1 = new THREE.MeshStandardMaterial({ color: 0xff6b81, roughness: 0.3 });
+        const cakeBottom = new THREE.Mesh(cakeBottomGeo, cakeMat1);
+        cakeBottom.position.y = 0.125;
+        cakeGroup.add(cakeBottom);
+
+        const cakeTopGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.22, 32);
+        const cakeMat2 = new THREE.MeshStandardMaterial({ color: 0xff7675, roughness: 0.3 });
+        const cakeTop = new THREE.Mesh(cakeTopGeo, cakeMat2);
+        cakeTop.position.y = 0.36;
+        cakeGroup.add(cakeTop);
+
+        const creamMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+        for(let i = 0; i < 12; i++) {
+            const angle = (i / 12) * Math.PI * 2;
+            const creamGeo = new THREE.SphereGeometry(0.05, 16, 16);
+            const cream = new THREE.Mesh(creamGeo, creamMat);
+            cream.position.set(Math.cos(angle) * 0.38, 0.47, Math.sin(angle) * 0.38);
+            cakeGroup.add(cream);
+        }
+
+        const candleGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.2, 16);
+        const candleMat = new THREE.MeshStandardMaterial({ color: 0x74b9ff, roughness: 0.3 });
+        const candle = new THREE.Mesh(candleGeo, candleMat);
+        candle.position.y = 0.57;
+        cakeGroup.add(candle);
+
+        const flameGeo = new THREE.SphereGeometry(0.045, 16, 16);
+        flameGeo.scale(1, 1.8, 1);
+        const flameMat = new THREE.MeshBasicMaterial({ color: 0xffbe76 });
+        const flame = new THREE.Mesh(flameGeo, flameMat);
+        flame.position.y = 0.72;
+        cakeGroup.add(flame);
+
+        const flameCoreGeo = new THREE.SphereGeometry(0.025, 16, 16);
+        const flameCoreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const flameCore = new THREE.Mesh(flameCoreGeo, flameCoreMat);
+        flameCore.position.y = 0.71;
+        cakeGroup.add(flameCore);
+
+        const festiveSystem = new FestiveParticleSystem(scene);
+
+        // --- 6. MediaPipe Hands Integration & Logic ---
+        const videoElement = document.getElementById('webcam');
+        const statusBadge = document.getElementById('status');
+        const loadingDiv = document.getElementById('loading');
+
+        let targetOpenFactor = 0;
+        let currentOpenFactor = 0;
+        let isOpened = false;
+
+        function onHandResults(results) {
+            if (loadingDiv.style.opacity !== '0') {
+                loadingDiv.style.opacity = '0';
+            }
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+
+                const wrist = landmarks[0];
+                const fingertips = [8, 12, 16, 20];
+                let totalDist = 0;
+
+                fingertips.forEach(idx => {
+                    const pt = landmarks[idx];
+                    const dist = Math.hypot(pt.x - wrist.x, pt.y - wrist.y, pt.z - wrist.z);
+                    totalDist += dist;
+                });
+
+                const avgDist = totalDist / fingertips.length;
+
+                if (avgDist > 0.32) {
+                    targetOpenFactor = 1.0;
+                    statusBadge.innerHTML = '✨ Hand Status: <b>Open (Unfolding)</b>';
+                    statusBadge.style.color = '#2ed573';
+                    statusBadge.style.borderColor = 'rgba(46, 213, 115, 0.4)';
+                } else if (avgDist < 0.26) {
+                    targetOpenFactor = 0.0;
+                    statusBadge.innerHTML = '✊ Hand Status: <b>Closed (Card Closed)</b>';
+                    statusBadge.style.color = '#ff4757';
+                    statusBadge.style.borderColor = 'rgba(255, 71, 87, 0.4)';
+                }
+            } else {
+                statusBadge.innerHTML = '👋 Hand Status: <b>Waiting for Hand...</b>';
+                statusBadge.style.color = '#ffb142';
+                statusBadge.style.borderColor = 'rgba(255, 177, 66, 0.3)';
+            }
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.65,
+            minTrackingConfidence: 0.65
+        });
+        hands.onResults(onHandResults);
+
+        const cameraPipe = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+        cameraPipe.start();
+
+        // --- 7. Animation Loop ---
+        let clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const elapsedTime = clock.getElapsedTime();
+
+            currentOpenFactor += (targetOpenFactor - currentOpenFactor) * 0.045;
+            coverPivot.rotation.x = -currentOpenFactor * Math.PI * 0.75;
+
+            if (currentOpenFactor > 0.35 && !isOpened) {
+                isOpened = true;
+                festiveSystem.explode();
+                bgm.start();
+            } else if (currentOpenFactor < 0.1 && isOpened) {
+                isOpened = false;
+                bgm.stop();
+            }
+
+            festiveSystem.update();
+
+            candleLight.intensity = 3.0 + Math.sin(elapsedTime * 10) * 0.35 + Math.cos(elapsedTime * 17) * 0.2;
+            flame.scale.set(
+                1 + Math.sin(elapsedTime * 12) * 0.1,
+                1.8 + Math.cos(elapsedTime * 15) * 0.15,
+                1 + Math.sin(elapsedTime * 12) * 0.1
+            );
+
+            cardGroup.position.y = Math.sin(elapsedTime * 1.5) * 0.05;
+
+            controls.update();
+            composer.render();
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
